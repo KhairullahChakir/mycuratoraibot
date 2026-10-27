@@ -1,7 +1,7 @@
 
 import asyncio
 import os
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -24,6 +24,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import BOT_TOKEN
 from app.admin_students import register_admin_handlers
+from app.homework_handlers import register_homework_handlers
+from app.homework_service import homework_worker
+from app.homework_texts import texts as homework_texts
 from app.database.db import AsyncSessionLocal, init_db, engine
 from app.database.models import (
     Student,
@@ -41,7 +44,6 @@ from app.database.models import (
 dp = Dispatcher(storage=MemoryStorage())
 
 ALMATY_TZ = ZoneInfo("Asia/Almaty")
-SAMPLE_HOMEWORK_ID = None
 
 ADMIN_IDS = {
     int(value.strip())
@@ -98,24 +100,6 @@ LANGUAGES = {
         "invalid_name": "Enter a name between 2 and 100 characters.",
         "invalid_course": "Enter a course name between 2 and 100 characters.",
 
-        "homework_pending": (
-            "📚 Your Homework\n\n"
-            "1. Python Basics\n"
-            "Task: Complete exercises 1–5.\n"
-            "Due date: 25 October 2026\n"
-            "Status: Pending"
-        ),
-        "homework_completed": (
-            "📚 Your Homework\n\n"
-            "1. Python Basics\n"
-            "Task: Complete exercises 1–5.\n"
-            "Due date: 25 October 2026\n"
-            "Status: ✅ Completed"
-        ),
-        "mark_completed": "✅ Mark as Completed",
-        "already_completed": "This homework is already completed.",
-        "completion_notification": "Homework marked as completed!",
-
         "webinars_header": "📅 Upcoming Webinars",
         "no_webinars": "There are no upcoming webinars.",
         "webinar_starts": "Starts",
@@ -146,8 +130,8 @@ LANGUAGES = {
             "1. Select My Homework from the menu.\n"
             "2. Read the instructions and deadline.\n"
             "3. Complete the assignment.\n"
-            "4. Press Mark as Completed to update its status.\n\n"
-            "The current Python assignment is sample data."
+            "4. Open the assignment and submit your text answer before the deadline.\n"
+            "5. Check feedback here. Rejected work can be resubmitted before the deadline."
         ),
         "faq_webinars_answer": (
             "📅 Joining Webinars\n\n"
@@ -186,24 +170,6 @@ LANGUAGES = {
         "invalid_name": "Введите имя длиной от 2 до 100 символов.",
         "invalid_course": "Введите название курса длиной от 2 до 100 символов.",
 
-        "homework_pending": (
-            "📚 Мои задания\n\n"
-            "1. Основы Python\n"
-            "Задание: Выполните упражнения 1–5.\n"
-            "Срок сдачи: 25 октября 2026 года\n"
-            "Статус: Не выполнено"
-        ),
-        "homework_completed": (
-            "📚 Мои задания\n\n"
-            "1. Основы Python\n"
-            "Задание: Выполните упражнения 1–5.\n"
-            "Срок сдачи: 25 октября 2026 года\n"
-            "Статус: ✅ Выполнено"
-        ),
-        "mark_completed": "✅ Отметить как выполненное",
-        "already_completed": "Это задание уже выполнено.",
-        "completion_notification": "Задание отмечено как выполненное!",
-
         "webinars_header": "📅 Предстоящие вебинары",
         "no_webinars": "Предстоящих вебинаров пока нет.",
         "webinar_starts": "Начало",
@@ -234,8 +200,8 @@ LANGUAGES = {
             "1. Выберите «Мои задания» в меню.\n"
             "2. Прочитайте задание и срок сдачи.\n"
             "3. Выполните работу.\n"
-            "4. Нажмите «Отметить как выполненное».\n\n"
-            "Текущее задание по Python является примером."
+            "4. Откройте задание и отправьте текстовый ответ до срока сдачи.\n"
+            "5. Проверьте комментарий. Отклонённую работу можно отправить повторно до срока сдачи."
         ),
         "faq_webinars_answer": (
             "📅 Участие в вебинарах\n\n"
@@ -273,24 +239,6 @@ LANGUAGES = {
         "invalid_name": "Аты-жөніңіз 2–100 таңба аралығында болуы керек.",
         "invalid_course": "Курс атауы 2–100 таңба аралығында болуы керек.",
 
-        "homework_pending": (
-            "📚 Үй тапсырмаларым\n\n"
-            "1. Python негіздері\n"
-            "Тапсырма: 1–5 жаттығуларды орындаңыз.\n"
-            "Мерзімі: 2026 жылғы 25 қазан\n"
-            "Күйі: Орындалмаған"
-        ),
-        "homework_completed": (
-            "📚 Үй тапсырмаларым\n\n"
-            "1. Python негіздері\n"
-            "Тапсырма: 1–5 жаттығуларды орындаңыз.\n"
-            "Мерзімі: 2026 жылғы 25 қазан\n"
-            "Күйі: ✅ Орындалды"
-        ),
-        "mark_completed": "✅ Орындалды деп белгілеу",
-        "already_completed": "Бұл тапсырма орындалған.",
-        "completion_notification": "Тапсырма орындалды деп белгіленді!",
-
         "webinars_header": "📅 Алдағы вебинарлар",
         "no_webinars": "Әзірге алдағы вебинарлар жоқ.",
         "webinar_starts": "Басталуы",
@@ -321,8 +269,8 @@ LANGUAGES = {
             "1. Мәзірден «Үй тапсырмаларым» бөлімін таңдаңыз.\n"
             "2. Тапсырма нұсқаулығы мен мерзімін оқыңыз.\n"
             "3. Тапсырманы орындаңыз.\n"
-            "4. Мәртебені жаңарту үшін «Орындалды деп белгілеу» түймесін басыңыз.\n\n"
-            "Қазіргі Python тапсырмасы мысал ретінде берілген."
+            "4. Тапсырманы ашып, мерзіміне дейін мәтіндік жауап жіберіңіз.\n"
+            "5. Кері байланысты қараңыз. Қабылданбаған жұмысты мерзіміне дейін қайта жіберуге болады."
         ),
         "faq_webinars_answer": (
             "📅 Вебинарларға қатысу\n\n"
@@ -493,72 +441,7 @@ async def save_student_profile(
         await session.commit()
 
 
-async def get_or_create_sample_homework() -> int:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Homework)
-            .where(Homework.title == "Python Basics")
-            .limit(1)
-        )
-        homework = result.scalar_one_or_none()
 
-        if homework is None:
-            homework = Homework(
-                title="Python Basics",
-                description="Complete exercises 1–5.",
-                due_date=date(2026, 10, 25),
-            )
-            session.add(homework)
-            await session.flush()
-
-        homework_id = homework.id
-        await session.commit()
-        return homework_id
-
-
-async def is_homework_completed(user_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(HomeworkSubmission).where(
-                HomeworkSubmission.student_id == user_id,
-                HomeworkSubmission.homework_id == SAMPLE_HOMEWORK_ID,
-            )
-        )
-        submission = result.scalar_one_or_none()
-
-        return submission is not None and submission.completed
-
-
-async def save_homework_completion(user_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(HomeworkSubmission).where(
-                HomeworkSubmission.student_id == user_id,
-                HomeworkSubmission.homework_id == SAMPLE_HOMEWORK_ID,
-            )
-        )
-        submission = result.scalar_one_or_none()
-
-        if submission is not None and submission.completed:
-            return False
-
-        now = datetime.now(timezone.utc)
-
-        if submission is None:
-            session.add(
-                HomeworkSubmission(
-                    student_id=user_id,
-                    homework_id=SAMPLE_HOMEWORK_ID,
-                    completed=True,
-                    completed_at=now,
-                )
-            )
-        else:
-            submission.completed = True
-            submission.completed_at = now
-
-        await session.commit()
-        return True
 
 
 async def get_upcoming_webinars():
@@ -640,17 +523,6 @@ def get_main_menu_keyboard(language):
     )
 
 
-def get_homework_keyboard(language):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=language["mark_completed"],
-                    callback_data="homework:complete",
-                )
-            ]
-        ]
-    )
 
 
 def get_faq_keyboard(language):
@@ -883,6 +755,10 @@ async def send_open_support(message: Message):
 
 
 register_admin_handlers(dp, ADMIN_IDS, show_stats, show_open_support)
+homework_handlers = register_homework_handlers(
+    dp, ADMIN_IDS,
+    lambda language: get_main_menu_keyboard(LANGUAGES.get(language, LANGUAGES["🇬🇧 English"])),
+)
 
 
 @dp.message(Command("addwebinar"))
@@ -899,6 +775,9 @@ async def add_webinar_command(message: Message, state: FSMContext):
         "➕ Create a webinar\n\nEnter the webinar title "
         "(up to 200 characters).\nSend /cancel to stop."
     )
+
+
+homework_handlers.register_states(dp)
 
 
 # =====================================
@@ -1433,7 +1312,12 @@ async def menu_handler(message: Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
-    selected_language = await get_saved_language(user_id)
+    try:
+        selected_language = await get_saved_language(user_id)
+    except (SQLAlchemyError, OSError, TimeoutError):
+        language_key = next((key for key, value in LANGUAGES.items() if value["homework"] == message.text), None)
+        await message.answer(homework_texts(language_key)["db"])
+        return
 
     if selected_language not in LANGUAGES:
         await message.answer(
@@ -1478,13 +1362,7 @@ async def menu_handler(message: Message, state: FSMContext):
             )
 
     elif action == "homework":
-        if await is_homework_completed(user_id):
-            await message.answer(language["homework_completed"])
-        else:
-            await message.answer(
-                language["homework_pending"],
-                reply_markup=get_homework_keyboard(language),
-            )
+        await homework_handlers.show_student(message, user_id)
 
     elif action == "webinars":
         webinars = await get_upcoming_webinars()
@@ -1575,37 +1453,15 @@ async def faq_handler(message: Message, state: FSMContext):
 
 
 # =====================================
-# HOMEWORK COMPLETION
+# LEGACY HOMEWORK BUTTONS
 # =====================================
 
 @dp.callback_query(F.data == "homework:complete")
 async def complete_homework(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    selected_language = await get_saved_language(user_id)
-
-    if selected_language not in LANGUAGES:
-        await callback.answer(
-            "Please choose your language first.",
-            show_alert=True,
-        )
-        return
-
-    language = LANGUAGES[selected_language]
-    saved = await save_homework_completion(user_id)
-
-    if not saved:
-        await callback.answer(
-            language["already_completed"],
-            show_alert=True,
-        )
-        return
-
+    # Old sample buttons cannot bypass submission and administrator review.
+    await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            language["homework_completed"]
-        )
-
-    await callback.answer(language["completion_notification"])
+        await homework_handlers.show_student(callback.message, callback.from_user.id)
 
 
 # =====================================
@@ -1707,18 +1563,15 @@ async def reminder_loop(bot: Bot):
 # =====================================
 
 async def main():
-    global SAMPLE_HOMEWORK_ID
-
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN is missing. Check your .env file.")
 
     await init_db()
     await ensure_webinar_columns()
 
-    SAMPLE_HOMEWORK_ID = await get_or_create_sample_homework()
-
     bot = Bot(token=BOT_TOKEN)
     reminder_task = asyncio.create_task(reminder_loop(bot))
+    homework_task = asyncio.create_task(homework_worker(bot))
 
     print("Bot is running!")
 
@@ -1732,9 +1585,15 @@ async def main():
         await dp.start_polling(bot)
     finally:
         reminder_task.cancel()
+        homework_task.cancel()
 
         try:
             await reminder_task
+        except asyncio.CancelledError:
+            pass
+
+        try:
+            await homework_task
         except asyncio.CancelledError:
             pass
 

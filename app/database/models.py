@@ -77,6 +77,8 @@ class Homework(Base):
         nullable=True,
     )
 
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -131,6 +133,45 @@ class HomeworkSubmission(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="not_submitted", server_default="not_submitted")
+    revision: Mapped[int] = mapped_column(default=0, server_default="0")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class HomeworkAssignment(Base):
+    __tablename__ = "homework_assignments"
+
+    student_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("students.telegram_id", ondelete="CASCADE"), primary_key=True,
+    )
+    homework_id: Mapped[int] = mapped_column(
+        ForeignKey("homework.id", ondelete="CASCADE"), primary_key=True,
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    )
+    reminder_queued: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class HomeworkNotification(Base):
+    __tablename__ = "homework_notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_key: Mapped[str] = mapped_column(String(150), unique=True)
+    student_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("students.telegram_id", ondelete="CASCADE"),
+    )
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 # =====================================
