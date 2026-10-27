@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.db import AsyncSessionLocal
-from app.database.models import Homework, HomeworkAssignment, HomeworkNotification, HomeworkSubmission, Student
+from app.database.models import Homework, HomeworkAssignment, HomeworkNotification, HomeworkSubmission, Student, Webinar
 from app.homework_texts import texts
 
 
@@ -236,6 +236,13 @@ async def deliver_notifications(bot, limit=100):
                 .with_for_update(skip_locked=True).limit(1))).scalar_one_or_none()
             if notification is None:
                 return
+            if notification.event_key.startswith("webinar:"):
+                webinar_id = int(notification.event_key.split(":")[1])
+                webinar = await session.get(Webinar, webinar_id)
+                if webinar is None or utc(webinar.starts_at) <= datetime.now(timezone.utc):
+                    notification.status = "cancelled"
+                    await session.commit()
+                    continue
             if notification.event_key.startswith("reminder:"):
                 homework_id = int(notification.event_key.split(":")[1])
                 homework = await session.get(Homework, homework_id)

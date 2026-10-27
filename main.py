@@ -1,6 +1,7 @@
 
 import asyncio
 import os
+import logging
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
@@ -25,13 +26,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import BOT_TOKEN
 from app.admin_students import register_admin_handlers
 from app.homework_handlers import register_homework_handlers
-from app.homework_service import homework_worker
+from app.homework_service import queue_reminders, deliver_notifications
+from app.runtime import run_bot
+from app.settings import parse_admin_ids
 from app.homework_texts import texts as homework_texts
 from app.database.db import AsyncSessionLocal, init_db, engine
 from app.database.models import (
     Student,
     Homework,
     HomeworkSubmission,
+    HomeworkNotification,
     Webinar,
     SupportRequest,
 )
@@ -45,11 +49,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 ALMATY_TZ = ZoneInfo("Asia/Almaty")
 
-ADMIN_IDS = {
-    int(value.strip())
-    for value in os.getenv("ADMIN_IDS", "").split(",")
-    if value.strip().isdigit()
-}
+ADMIN_IDS = parse_admin_ids(os.getenv("ADMIN_IDS", ""))
 
 
 # =====================================
@@ -1468,93 +1468,99 @@ async def complete_homework(callback: CallbackQuery):
 # AUTOMATIC WEBINAR REMINDERS
 # =====================================
 
-async def reminder_loop(bot: Bot):
+async def send_webinar_reminders(bot):
+    now = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as session:
+        webinar_result = await session.execute(
+            select(Webinar).where(Webinar.starts_at > now)
+        )
+        webinars = list(webinar_result.scalars().all())
+
+        student_result = await session.execute(
+            select(Student.telegram_id, Student.language)
+        )
+        students = list(student_result.all())
+
+        for webinar in webinars:
+            start_time = webinar.starts_at
+
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+
+            time_left = start_time - now
+
+            # Send the 1-hour reminder only during the final hour.
+            if (
+                not webinar.reminder_1h_sent
+                and timedelta(0) < time_left <= timedelta(hours=1)
+            ):
+                reminder_key = "reminder_1h"
+                flag_name = "reminder_1h_sent"
+
+            # Send the 24-hour reminder only between 23h55m and 24h
+            # before the webinar. This stops short-notice webinars
+            # from getting both reminders at once.
+            elif (
+                not webinar.reminder_24h_sent
+                and timedelta(hours=23, minutes=55)
+                <= time_left
+                <= timedelta(hours=24)
+            ):
+                reminder_key = "reminder_24h"
+                flag_name = "reminder_24h_sent"
+
+            else:
+                continue
+
+            local_start = start_time.astimezone(ALMATY_TZ)
+
+            for student_id, student_language in students:
+                language = LANGUAGES.get(
+                    student_language,
+                    LANGUAGES["🇬🇧 English"],
+                )
+
+                notification = (
+                    f"{language[reminder_key]}\n\n"
+                    f"📅 {webinar.title}\n"
+                    f"{webinar.description}\n"
+                    f"🕒 {local_start.strftime('%d.%m.%Y %H:%M')} "
+                    "(Almaty time)"
+                )
+
+                if webinar.meeting_url:
+                    notification += f"\n🔗 {webinar.meeting_url}"
+
+                session.add(HomeworkNotification(
+                    event_key=f"webinar:{webinar.id}:{reminder_key}:{student_id}",
+                    student_id=student_id,
+                    text=notification,
+                ))
+
+            # Commit notices and the flag together; deployment shutdown cannot
+            # leave delivered recipients eligible for another broadcast.
+            setattr(webinar, flag_name, True)
+
+        await session.commit()
+
+
+
+async def homework_reminders(bot):
+    await queue_reminders()
+    await deliver_notifications(bot)
+
+
+async def reminder_loop(bot):
+    # One scheduler owns both reminder types and the shared delivery queue.
     while True:
-        try:
-            now = datetime.now(timezone.utc)
-
-            async with AsyncSessionLocal() as session:
-                webinar_result = await session.execute(
-                    select(Webinar).where(Webinar.starts_at > now)
-                )
-                webinars = list(webinar_result.scalars().all())
-
-                student_result = await session.execute(
-                    select(Student.telegram_id, Student.language)
-                )
-                students = list(student_result.all())
-
-                for webinar in webinars:
-                    start_time = webinar.starts_at
-
-                    if start_time.tzinfo is None:
-                        start_time = start_time.replace(tzinfo=timezone.utc)
-
-                    time_left = start_time - now
-
-                    # Send the 1-hour reminder only during the final hour.
-                    if (
-                        not webinar.reminder_1h_sent
-                        and timedelta(0) < time_left <= timedelta(hours=1)
-                    ):
-                        reminder_key = "reminder_1h"
-                        flag_name = "reminder_1h_sent"
-
-                    # Send the 24-hour reminder only between 23h55m and 24h
-                    # before the webinar. This stops short-notice webinars
-                    # from getting both reminders at once.
-                    elif (
-                        not webinar.reminder_24h_sent
-                        and timedelta(hours=23, minutes=55)
-                        <= time_left
-                        <= timedelta(hours=24)
-                    ):
-                        reminder_key = "reminder_24h"
-                        flag_name = "reminder_24h_sent"
-
-                    else:
-                        continue
-
-                    local_start = start_time.astimezone(ALMATY_TZ)
-
-                    for student_id, student_language in students:
-                        language = LANGUAGES.get(
-                            student_language,
-                            LANGUAGES["🇬🇧 English"],
-                        )
-
-                        notification = (
-                            f"{language[reminder_key]}\n\n"
-                            f"📅 {webinar.title}\n"
-                            f"{webinar.description}\n"
-                            f"🕒 {local_start.strftime('%d.%m.%Y %H:%M')} "
-                            "(Almaty time)"
-                        )
-
-                        if webinar.meeting_url:
-                            notification += f"\n🔗 {webinar.meeting_url}"
-
-                        try:
-                            await bot.send_message(
-                                chat_id=student_id,
-                                text=notification,
-                            )
-                        except TelegramAPIError as error:
-                            print(
-                                f"Could not send webinar reminder to "
-                                f"student {student_id}: {error}"
-                            )
-
-                    # Mark the reminder after processing all students.
-                    setattr(webinar, flag_name, True)
-
-                await session.commit()
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            print(f"Webinar reminder scheduler error: {error}")
-
+        for process in (send_webinar_reminders, homework_reminders):
+            try:
+                await process(bot)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logging.warning("Reminder processing temporarily failed (%s).", type(error).__name__)
         await asyncio.sleep(60)
 
 
@@ -1562,44 +1568,33 @@ async def reminder_loop(bot: Bot):
 # START BOT
 # =====================================
 
-async def main():
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN is missing. Check your .env file.")
-
+async def initialize_database():
     await init_db()
     await ensure_webinar_columns()
 
-    bot = Bot(token=BOT_TOKEN)
-    reminder_task = asyncio.create_task(reminder_loop(bot))
-    homework_task = asyncio.create_task(homework_worker(bot))
 
-    print("Bot is running!")
-
-    if not ADMIN_IDS:
-        print(
-            "Warning: ADMIN_IDS is empty. "
-            "Set it in .env to allow webinar creation."
-        )
-
+async def main():
+    bot = None
     try:
-        await dp.start_polling(bot)
+        if not BOT_TOKEN:
+            raise ValueError("BOT_TOKEN is required in the environment.")
+        bot = Bot(token=BOT_TOKEN)
+        if not ADMIN_IDS:
+            logging.warning("ADMIN_IDS is empty; administrator features are disabled.")
+        await run_bot(bot, dp, engine, initialize_database, reminder_loop)
     finally:
-        reminder_task.cancel()
-        homework_task.cancel()
-
-        try:
-            await reminder_task
-        except asyncio.CancelledError:
-            pass
-
-        try:
-            await homework_task
-        except asyncio.CancelledError:
-            pass
-
-        await bot.session.close()
-        await engine.dispose()
+        # run_bot owns cleanup once a Bot exists, including failed migrations.
+        if bot is None:
+            await engine.dispose()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as error:
+        # Driver exceptions may include credentials; keep Railway logs sanitized.
+        logging.error("Bot worker stopped (%s). Check environment, database, and Telegram access.", type(error).__name__)
+        raise SystemExit(1) from None

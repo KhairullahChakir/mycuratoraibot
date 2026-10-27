@@ -3,5 +3,6 @@ asyncpg==0.32.0
 fastapi==0.115.12
 pydantic==2.13.4
 python-dotenv==1.1.0
-SQLAlchemy==2.0.41
+SQLAlchemy[asyncio]==2.0.41
+tzdata>=2025.2,<2027
 uvicorn==0.34.2

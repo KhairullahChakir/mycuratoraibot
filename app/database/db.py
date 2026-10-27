@@ -7,15 +7,16 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
 
 from app.config import DATABASE_URL
-
-
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is missing. Check your .env file.")
+from app.settings import async_database_url
 
 
 engine = create_async_engine(
-    DATABASE_URL,
+    async_database_url(DATABASE_URL),
     echo=False,
+    hide_parameters=True,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"timeout": 15, "command_timeout": 60},
 )
 
 

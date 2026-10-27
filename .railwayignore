@@ -1,0 +1,64 @@
+# CLI uploads must exclude local credentials and generated files.
+.git/
+# Environment configuration and credentials
+.env
+.env.*
+*.env
+secrets/
+.secrets/
+secrets.*
+credentials.*
+service-account*.json
+service_account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+.aws/
+.ssh/
+
+# Python environments and generated caches
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local databases, sessions, and database exports
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.sql
+*.sql.gz
+*.dump
+*.dump.gz
+*.backup
+*.bak
+*.session
+*.session-journal
+pgdata/
+postgres-data/
+dumps/
+backups/
+
+# Build output, logs, and local editor/OS files
+build/
+dist/
+*.egg-info/
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

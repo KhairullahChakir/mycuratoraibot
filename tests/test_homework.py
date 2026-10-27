@@ -285,6 +285,17 @@ class HomeworkTests(unittest.IsolatedAsyncioTestCase):
         reminder = next(n for n in self.records(HomeworkNotification) if n.event_key.startswith("reminder:"))
         self.assertEqual(reminder.status, "cancelled")
 
+    async def test_queued_webinar_notice_is_cancelled_if_session_has_started(self):
+        with Session(self.database) as session:
+            session.add(main.Webinar(id=1, title="Past webinar", description="Details",
+                starts_at=datetime.now(timezone.utc) - timedelta(minutes=1)))
+            session.add(HomeworkNotification(event_key="webinar:1:reminder_1h:1", student_id=1, text="Reminder"))
+            session.commit()
+        bot = AsyncMock()
+        await service.deliver_notifications(bot)
+        bot.send_message.assert_not_awaited()
+        self.assertEqual(self.records(HomeworkNotification)[0].status, "cancelled")
+
     async def test_rate_limit_retries_only_the_rejected_chunk(self):
         send = AsyncMock(side_effect=[TelegramRetryAfter(
             method=SendMessage(chat_id=1, text="Notice"), message="Retry", retry_after=1,

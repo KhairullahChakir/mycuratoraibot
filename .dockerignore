@@ -1,0 +1,21 @@
+# Allowlist the build context; everything else stays on the local machine.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!main.py
+!init_database.py
+!app/
+!app/**/
+!app/**/*.py
+**/__pycache__/**
+**/venv/**
+**/.venv/**
+**/env/**
+**/secrets.py
+**/credentials.py
+**/secrets/**
+**/.secrets/**
+**/.aws/**
+**/.ssh/**
+**/.env*
